@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J.A.R.V.I.S. Asistente Inclusivo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>J.A.R.V.I.S. | Asistente de Cuidado</h1>
+        <p>Haga una pregunta sobre salud, recordatorios o use el botón de voz.</p>
+    </header>
+
+    <main>
+        <div id="chat-container">
+            {% for message in chat_history %}
+            <div class="chat-message {{ 'user-message' if message.role == 'user' else 'ai-message' }}">
+                <p><strong>{{ 'Usted' if message.role == 'user' else 'J.A.R.V.I.S.' }}:</strong> {{ message.text }}</p>
+            </div>
+            {% endfor %}
+            <div id="loading-indicator" style="display: none;">J.A.R.V.I.S. está pensando...</div>
+        </div>
+
+        <form id="input-form">
+            <input type="text" id="user-input" name="user_input" placeholder="Escriba su pregunta..." required>
+            <button type="submit">Enviar</button>
+            <button type="button" id="voice-button" aria-label="Activar reconocimiento de voz">🎙️ Hablar</button>
+        </form>
+    </main>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const inputForm = document.getElementById('input-form');
+        const userInput = document.getElementById('user-input');
+        const voiceButton = document.getElementById('voice-button');
+        const loadingIndicator = document.getElementById('loading-indicator');
+
+        // Función para agregar mensajes al chat y desplazar
+        function addMessage(role, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${role === 'user' ? 'user-message' : 'ai-message'}`;
+            messageDiv.innerHTML = `<p><strong>${role === 'user' ? 'Usted' : 'J.A.R.V.I.S.'}:</strong> ${text}</p>`;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // --- TTS (Texto a Voz) ---
+        function speak(text) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'es-ES'; // Configurar idioma
+                utterance.rate = 0.9; // Hablar un poco más lento para mejor comprensión
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        // --- STT (Voz a Texto) ---
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'es-ES';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            voiceButton.addEventListener('click', () => {
+                recognition.start();
+                voiceButton.textContent = '🔴 Escuchando...';
+                voiceButton.disabled = true;
+            });
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                userInput.value = transcript;
+                recognition.stop();
+                voiceButton.textContent = '🎙️ Hablar';
+                voiceButton.disabled = false;
+                inputForm.dispatchEvent(new Event('submit')); // Envía el formulario automáticamente
+            };
+
+            recognition.onerror = (event) => {
+                console.error(event.error);
+                recognition.stop();
+                voiceButton.textContent = '🎙️ Hablar';
+                voiceButton.disabled = false;
+                addMessage('model', 'Lo siento, no pude entender el audio. ¿Podría repetir o escribirlo?');
+            };
+
+        } else {
+            voiceButton.style.display = 'none'; // Oculta el botón si el navegador no lo soporta
+        }
+
+        // --- Manejo del Formulario (Comunicación con Flask) ---
+        inputForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const userText = userInput.value.trim();
+            if (!userText) return;
+
+            addMessage('user', userText);
+            userInput.value = '';
+            loadingIndicator.style.display = 'block';
+
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({ user_input: userText })
+                });
+
+                const data = await response.json();
+                
+                loadingIndicator.style.display = 'none';
+
+                if (data.response) {
+                    addMessage('model', data.response);
+                    speak(data.response); // J.A.R.V.I.S. habla la respuesta
+                } else if (data.error) {
+                    addMessage('model', `Error: ${data.error}`);
+                }
+
+            } catch (error) {
+                loadingIndicator.style.display = 'none';
+                addMessage('model', 'Hubo un problema de conexión con el servidor. Por favor, inténtelo más tarde.');
+            }
+        });
+    </script>
+</body>
+</html>
